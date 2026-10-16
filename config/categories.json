@@ -1,21 +1,29 @@
 {
-  "_comment": "Keyword rules for categorizing bank descriptions. First match wins, so specific rules go first. 'group' marks each category as Income, Essential, or Discretionary.",
+  "_comment": "Maps the bank's Czech transaction codes to English categories. A rule matches on any of: type, operation, k_symbol (the payment purpose code). First match wins, so specific rules come first. Cash withdrawals and transfers out carry no purpose code, so they get their own group instead of being guessed.",
+  "translations": {
+    "type": {"PRIJEM": "credit", "VYDAJ": "debit", "VYBER": "withdrawal"},
+    "operation": {
+      "VYBER KARTOU": "card purchase", "VKLAD": "cash deposit", "PREVOD Z UCTU": "transfer in",
+      "VYBER": "cash withdrawal", "PREVOD NA UCET": "transfer out"
+    },
+    "k_symbol": {
+      "POJISTNE": "insurance", "SLUZBY": "statement fee", "UROK": "interest credited",
+      "SANKC. UROK": "penalty interest", "SIPO": "household bills", "DUCHOD": "pension", "UVER": "loan payment"
+    },
+    "frequency": {"POPLATEK MESICNE": "monthly", "POPLATEK TYDNE": "weekly", "POPLATEK PO OBRATU": "after each transaction"}
+  },
   "rules": [
-    {"category": "Income",           "group": "Income",        "keywords": ["PAYROLL", "DIRECT DEP"]},
-    {"category": "Transfers",        "group": "Transfer",      "keywords": ["VENMO", "ZELLE", "CASHOUT"]},
-    {"category": "Education",        "group": "Essential",     "keywords": ["BOOK CENTER", "CHEGG", "TEXTBOOK", "TUITION"]},
-    {"category": "Food Delivery",    "group": "Discretionary", "keywords": ["UBER *EATS", "UBER EATS", "DOORDASH", "DD *", "GRUBHUB"]},
-    {"category": "Rideshare",        "group": "Discretionary", "keywords": ["UBER *TRIP", "LYFT"]},
-    {"category": "Gas",              "group": "Essential",     "keywords": ["WAWA", "SHELL", "EXXON", "ROYAL FARMS", "SUNOCO", "BP#"]},
-    {"category": "Car",              "group": "Essential",     "keywords": ["GEICO", "JIFFY LUBE", "TIRE", "AUTOZONE", "MVA", "PARKING"]},
-    {"category": "Phone",            "group": "Essential",     "keywords": ["VERIZON", "T-MOBILE", "AT&T"]},
-    {"category": "Groceries",        "group": "Essential",     "keywords": ["GIANT FOOD", "WEIS", "TRADER JOE", "WM SUPERCENTER", "ALDI", "SAFEWAY"]},
-    {"category": "Subscriptions",    "group": "Discretionary", "keywords": ["SPOTIFY", "NETFLIX", "HULU", "APPLE.COM/BILL", "PLANET FITNESS", "DISNEY"]},
-    {"category": "Coffee & Snacks",  "group": "Discretionary", "keywords": ["STARBUCKS", "BOBA", "DUNKIN"]},
-    {"category": "Dining Out",       "group": "Discretionary", "keywords": ["CHIPOTLE", "NANDOS", "CHICK-FIL-A", "SWEETGREEN", "SHAWARMA", "ROYAL INDIA", "MCDONALD", "QDOBA", "TST*"]},
-    {"category": "Gifts",            "group": "Discretionary", "keywords": ["*GIFT"]},
-    {"category": "Travel",           "group": "Discretionary", "keywords": ["AIRL", "AIRBNB", "HOTEL", "AMTRAK"]},
-    {"category": "Entertainment",    "group": "Discretionary", "keywords": ["AMC", "TICKETMASTER", "DAVE & BUSTERS", "STEAM"]},
-    {"category": "Shopping",         "group": "Discretionary", "keywords": ["AMAZON", "TARGET", "NIKE", "ZARA", "WALMART.COM"]}
+    {"category": "Pension",          "group": "Income",           "k_symbol": "DUCHOD"},
+    {"category": "Interest Earned",  "group": "Income",           "k_symbol": "UROK"},
+    {"category": "Transfers In",     "group": "Income",           "operation": "PREVOD Z UCTU"},
+    {"category": "Cash Deposits",    "group": "Income",           "operation": "VKLAD"},
+    {"category": "Penalty Interest", "group": "Avoidable",        "k_symbol": "SANKC. UROK"},
+    {"category": "Bank Fees",        "group": "Avoidable",        "k_symbol": "SLUZBY"},
+    {"category": "Household Bills",  "group": "Essential",        "k_symbol": "SIPO"},
+    {"category": "Insurance",        "group": "Essential",        "k_symbol": "POJISTNE"},
+    {"category": "Loan Payments",    "group": "Essential",        "k_symbol": "UVER"},
+    {"category": "Card Purchases",   "group": "Discretionary",    "operation": "VYBER KARTOU"},
+    {"category": "Cash Withdrawals", "group": "Cash & Transfers", "operation": "VYBER"},
+    {"category": "Transfers Out",    "group": "Cash & Transfers", "operation": "PREVOD NA UCET"}
   ]
 }

@@ -1,10 +1,15 @@
-"""Personal expense tracker: import bank CSV exports, categorize, store in SQLite, summarize.
+"""Expense tracker for real bank transactions (Berka Czech bank dataset).
+
+Loads the raw bank export, translates the Czech transaction codes, categorizes
+every transaction with rules from config/categories.json, and stores the result
+in SQLite so any account can be summarized by month and category.
 
 Usage:
-    python src/tracker.py import data/sample/sample_bank_export.csv
-    python src/tracker.py summary --month 2026-03
-    python src/tracker.py uncategorized
-    python src/tracker.py budget
+    python src/download_data.py                     # one-time download
+    python src/tracker.py build                     # load + categorize -> data/bank.db
+    python src/tracker.py summary --account 2378 --year 1998
+    python src/tracker.py flags --account 2378 --year 1998
+    python src/tracker.py fees --year 1998
 """
 
 import argparse
@@ -12,155 +17,129 @@ import json
 import sqlite3
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "data" / "expenses.db"
-RULES_PATH = ROOT / "config" / "categories.json"
+RAW = ROOT / "data" / "raw"
+DB_PATH = ROOT / "data" / "bank.db"
+CONFIG = json.loads((ROOT / "config" / "categories.json").read_text())
 
-# Column names used by common bank exports -> our standard names
-FORMATS = {
-    "chase":       {"date": "Transaction Date", "description": "Description", "amount": "Amount"},
-    "bofa":        {"date": "Date", "description": "Description", "amount": "Amount"},
-    "capital_one": {"date": "Transaction Date", "description": "Description", "debit": "Debit", "credit": "Credit"},
-}
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS transactions (
-    id          INTEGER PRIMARY KEY,
-    date        TEXT NOT NULL,
-    description TEXT NOT NULL,
-    amount      REAL NOT NULL,          -- negative = money out, positive = money in
-    category    TEXT NOT NULL,
-    grp         TEXT NOT NULL,          -- Income / Essential / Discretionary / Transfer / Other
-    source_file TEXT,
-    UNIQUE (date, description, amount)  -- re-importing the same file never duplicates rows
-);
-"""
+# Approximate 1998 average exchange rate, used only to show amounts in USD for context.
+CZK_PER_USD = 32.3
 
 
-def detect_format(columns: list[str]) -> str:
-    cols = set(columns)
-    for name, spec in FORMATS.items():
-        if set(spec.values()) <= cols:
-            return name
-    raise ValueError(f"Unrecognized bank export. Columns found: {columns}")
+def load_raw() -> tuple[pd.DataFrame, pd.DataFrame]:
+    tx = pd.read_csv(RAW / "trans.asc", sep=";", low_memory=False,
+                     dtype={"type": str, "operation": str, "k_symbol": str, "bank": str, "account": str})
+    accounts = pd.read_csv(RAW / "account.asc", sep=";")
+    return tx, accounts
 
 
-def normalize(raw: pd.DataFrame) -> pd.DataFrame:
-    """Convert any supported bank export into date / description / amount."""
-    fmt = FORMATS[detect_format(list(raw.columns))]
-    out = pd.DataFrame({
-        "date": pd.to_datetime(raw[fmt["date"]]).dt.strftime("%Y-%m-%d"),
-        "description": raw[fmt["description"]].astype(str).str.strip().str.upper(),
-    })
-    if "amount" in fmt:
-        out["amount"] = pd.to_numeric(raw[fmt["amount"]])
-    else:  # Capital One splits money in and out into two columns
-        out["amount"] = pd.to_numeric(raw[fmt["credit"]]).fillna(0) - pd.to_numeric(raw[fmt["debit"]]).fillna(0)
-    return out
+def categorize(tx: pd.DataFrame) -> pd.DataFrame:
+    """Apply the first matching rule to every transaction (vectorized)."""
+    category = pd.Series("Uncategorized", index=tx.index)
+    group = pd.Series("Other", index=tx.index)
+    unassigned = pd.Series(True, index=tx.index)
+    for rule in CONFIG["rules"]:
+        match = unassigned.copy()
+        for field in ("type", "operation", "k_symbol"):
+            if field in rule:
+                match &= tx[field].str.strip().eq(rule[field])
+        category[match] = rule["category"]
+        group[match] = rule["group"]
+        unassigned &= ~match
+    return pd.DataFrame({"category": category, "grp": group})
 
 
-def load_rules(path: Path = RULES_PATH) -> list[dict]:
-    return json.loads(path.read_text())["rules"]
+def clean(tx: pd.DataFrame, accounts: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Parse dates, translate codes, sign amounts, and categorize."""
+    tr = CONFIG["translations"]
+    out = tx.copy()
+    out["date"] = pd.to_datetime(out["date"].astype(str), format="%y%m%d")
+    for col in ("type", "operation", "k_symbol"):
+        out[col] = out[col].fillna("").str.strip()
+    out = out.join(categorize(out))
+    out["operation_en"] = out["operation"].map(tr["operation"]).fillna("")
+    out["purpose_en"] = out["k_symbol"].map(tr["k_symbol"]).fillna("")
+    # The raw file stores every amount as positive; money out gets a negative sign here.
+    out["signed_amount"] = np.where(out["type"] == "PRIJEM", out["amount"], -out["amount"])
+    out = out[["trans_id", "account_id", "date", "category", "grp", "operation_en", "purpose_en",
+               "amount", "signed_amount", "balance"]]
+
+    acc = accounts.rename(columns={"date": "opened"}).copy()
+    acc["opened"] = pd.to_datetime(acc["opened"].astype(str), format="%y%m%d")
+    acc["statement_frequency"] = acc["frequency"].map(tr["frequency"])
+    return out, acc[["account_id", "district_id", "opened", "statement_frequency"]]
 
 
-def categorize(descriptions: pd.Series, rules: list[dict] | None = None) -> pd.DataFrame:
-    """Keyword-based categorization. First matching rule wins."""
-    rules = rules or load_rules()
-    categories, groups = [], []
-    for desc in descriptions.str.upper():
-        match = next((r for r in rules if any(k in desc for k in r["keywords"])), None)
-        categories.append(match["category"] if match else "Uncategorized")
-        groups.append(match["group"] if match else "Other")
-    return pd.DataFrame({"category": categories, "grp": groups}, index=descriptions.index)
+def build_database(db_path: Path = DB_PATH) -> tuple[int, int]:
+    tx, accounts = clean(*load_raw())
+    db_path.unlink(missing_ok=True)
+    with sqlite3.connect(db_path) as conn:
+        accounts.to_sql("accounts", conn, index=False)
+        tx.assign(date=tx["date"].dt.strftime("%Y-%m-%d")).to_sql("transactions", conn, index=False, chunksize=50_000)
+        conn.executescript("""
+            CREATE INDEX idx_tx_account_date ON transactions(account_id, date);
+            CREATE INDEX idx_tx_category ON transactions(category);
+        """)
+    return len(tx), len(accounts)
 
 
-def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
-    conn.executescript(SCHEMA)
-    return conn
+def query(sql: str, params: tuple = (), db_path: Path = DB_PATH) -> pd.DataFrame:
+    with sqlite3.connect(db_path) as conn:
+        return pd.read_sql_query(sql, conn, params=params)
 
 
-def import_csv(path: Path, db_path: Path = DB_PATH) -> int:
-    tx = normalize(pd.read_csv(path))
-    tx = tx.join(categorize(tx["description"]))
-    tx["source_file"] = Path(path).name
-    with connect(db_path) as conn:
-        before = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
-        conn.executemany(
-            "INSERT OR IGNORE INTO transactions (date, description, amount, category, grp, source_file) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            tx[["date", "description", "amount", "category", "grp", "source_file"]].itertuples(index=False),
-        )
-        after = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
-    return after - before
-
-
-def load_transactions(db_path: Path = DB_PATH) -> pd.DataFrame:
-    with connect(db_path) as conn:
-        df = pd.read_sql_query("SELECT * FROM transactions ORDER BY date", conn, parse_dates=["date"])
-    df["month"] = df["date"].dt.to_period("M")
-    df["spend"] = (-df["amount"]).clip(lower=0)
-    return df
-
-
-def monthly_summary(month: str, db_path: Path = DB_PATH) -> pd.DataFrame:
-    query = """
-        SELECT category, grp AS "group", COUNT(*) AS transactions, ROUND(-SUM(amount), 2) AS spent
-        FROM transactions
-        WHERE strftime('%Y-%m', date) = ? AND amount < 0 AND grp NOT IN ('Transfer')
-        GROUP BY category, grp
-        ORDER BY spent DESC
-    """
-    with connect(db_path) as conn:
-        return pd.read_sql_query(query, conn, params=(month,))
-
-
-def budget_report(db_path: Path = DB_PATH) -> pd.DataFrame:
-    """Suggested monthly budget per category.
-
-    Regular categories use the median month, so one-off spikes don't inflate the budget.
-    Lumpy categories (spent in only a few months, like textbooks or travel) get a
-    "sinking fund": the yearly total spread evenly across 12 months.
-    """
-    df = load_transactions(db_path)
-    spend = df[(df["grp"].isin(["Essential", "Discretionary"]))]
-    monthly = spend.pivot_table(index="month", columns="category", values="spend", aggfunc="sum", fill_value=0)
-    report = pd.DataFrame({
-        "avg_month": monthly.mean(),
-        "median_month": monthly.median(),
-        "max_month": monthly.max(),
-    }).round(0).sort_values("avg_month", ascending=False)
-    lumpy = report["median_month"] == 0
-    report["budget_type"] = lumpy.map({True: "sinking fund", False: "monthly"})
-    report["suggested_budget"] = (report["median_month"].where(~lumpy, report["avg_month"]) / 5).round() * 5
-    return report
+def monthly_spending(account_id: int | None = None, year: int | None = None) -> pd.DataFrame:
+    """Spending (money out) by month and category, for one account or the whole bank."""
+    where, params = ["signed_amount < 0"], []
+    if account_id is not None:
+        where.append("account_id = ?"); params.append(account_id)
+    if year is not None:
+        where.append("strftime('%Y', date) = ?"); params.append(str(year))
+    df = query(f"""
+        SELECT strftime('%Y-%m', date) AS month, category, SUM(amount) AS spent
+        FROM transactions WHERE {' AND '.join(where)}
+        GROUP BY month, category
+    """, tuple(params))
+    return df.pivot_table(index="month", columns="category", values="spent", fill_value=0)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Personal expense tracker")
-    sub = parser.add_subparsers(dest="cmd", required=True)
-    p_import = sub.add_parser("import", help="import a bank CSV export")
-    p_import.add_argument("csv", type=Path)
-    p_summary = sub.add_parser("summary", help="spending by category for one month")
-    p_summary.add_argument("--month", required=True, help="YYYY-MM")
-    sub.add_parser("uncategorized", help="list transactions no rule matched")
-    sub.add_parser("budget", help="suggested monthly budget per category")
-    args = parser.parse_args()
+    p = argparse.ArgumentParser(description="Bank expense tracker")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("build", help="load raw data, categorize, and store in SQLite")
+    for name in ("summary", "flags"):
+        s = sub.add_parser(name)
+        s.add_argument("--account", type=int, required=True)
+        s.add_argument("--year", type=int, default=1998)
+    f = sub.add_parser("fees", help="avoidable fees and penalty interest across all accounts")
+    f.add_argument("--year", type=int, default=1998)
+    args = p.parse_args()
+    pd.set_option("display.width", 140)
 
-    pd.set_option("display.width", 120)
-    if args.cmd == "import":
-        print(f"Imported {import_csv(args.csv)} new transactions from {args.csv.name}")
+    if args.cmd == "build":
+        n_tx, n_acc = build_database()
+        print(f"Stored {n_tx:,} transactions for {n_acc:,} accounts in {DB_PATH.relative_to(ROOT)}")
     elif args.cmd == "summary":
-        s = monthly_summary(args.month)
-        print(s.to_string(index=False))
-        print(f"\nTotal spent in {args.month}: ${s['spent'].sum():,.2f}")
-    elif args.cmd == "uncategorized":
-        df = load_transactions()
-        print(df[df["category"] == "Uncategorized"][["date", "description", "amount"]].to_string(index=False))
-    elif args.cmd == "budget":
-        print(budget_report().to_string())
+        m = monthly_spending(args.account, args.year).round(0)
+        m["TOTAL"] = m.sum(axis=1)
+        print(f"Account {args.account}, {args.year} spending by month (CZK)\n")
+        print(m.to_string())
+    elif args.cmd == "flags":
+        from analysis import flag_increases
+        m = monthly_spending(args.account, args.year)
+        flags = flag_increases(m, min_pct=0.30, min_amount=1000)
+        print(flags.round(0).to_string(index=False) if len(flags) else "No unusual month-over-month increases.")
+    elif args.cmd == "fees":
+        print(query("""
+            SELECT category, COUNT(DISTINCT account_id) AS accounts, COUNT(*) AS charges,
+                   ROUND(SUM(amount), 0) AS total_czk
+            FROM transactions
+            WHERE grp = 'Avoidable' AND strftime('%Y', date) = ?
+            GROUP BY category
+        """, (str(args.year),)).to_string(index=False))
 
 
 if __name__ == "__main__":
