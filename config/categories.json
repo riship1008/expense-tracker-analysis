@@ -1,0 +1,21 @@
+{
+  "_comment": "Keyword rules for categorizing bank descriptions. First match wins, so specific rules go first. 'group' marks each category as Income, Essential, or Discretionary.",
+  "rules": [
+    {"category": "Income",           "group": "Income",        "keywords": ["PAYROLL", "DIRECT DEP"]},
+    {"category": "Transfers",        "group": "Transfer",      "keywords": ["VENMO", "ZELLE", "CASHOUT"]},
+    {"category": "Education",        "group": "Essential",     "keywords": ["BOOK CENTER", "CHEGG", "TEXTBOOK", "TUITION"]},
+    {"category": "Food Delivery",    "group": "Discretionary", "keywords": ["UBER *EATS", "UBER EATS", "DOORDASH", "DD *", "GRUBHUB"]},
+    {"category": "Rideshare",        "group": "Discretionary", "keywords": ["UBER *TRIP", "LYFT"]},
+    {"category": "Gas",              "group": "Essential",     "keywords": ["WAWA", "SHELL", "EXXON", "ROYAL FARMS", "SUNOCO", "BP#"]},
+    {"category": "Car",              "group": "Essential",     "keywords": ["GEICO", "JIFFY LUBE", "TIRE", "AUTOZONE", "MVA", "PARKING"]},
+    {"category": "Phone",            "group": "Essential",     "keywords": ["VERIZON", "T-MOBILE", "AT&T"]},
+    {"category": "Groceries",        "group": "Essential",     "keywords": ["GIANT FOOD", "WEIS", "TRADER JOE", "WM SUPERCENTER", "ALDI", "SAFEWAY"]},
+    {"category": "Subscriptions",    "group": "Discretionary", "keywords": ["SPOTIFY", "NETFLIX", "HULU", "APPLE.COM/BILL", "PLANET FITNESS", "DISNEY"]},
+    {"category": "Coffee & Snacks",  "group": "Discretionary", "keywords": ["STARBUCKS", "BOBA", "DUNKIN"]},
+    {"category": "Dining Out",       "group": "Discretionary", "keywords": ["CHIPOTLE", "NANDOS", "CHICK-FIL-A", "SWEETGREEN", "SHAWARMA", "ROYAL INDIA", "MCDONALD", "QDOBA", "TST*"]},
+    {"category": "Gifts",            "group": "Discretionary", "keywords": ["*GIFT"]},
+    {"category": "Travel",           "group": "Discretionary", "keywords": ["AIRL", "AIRBNB", "HOTEL", "AMTRAK"]},
+    {"category": "Entertainment",    "group": "Discretionary", "keywords": ["AMC", "TICKETMASTER", "DAVE & BUSTERS", "STEAM"]},
+    {"category": "Shopping",         "group": "Discretionary", "keywords": ["AMAZON", "TARGET", "NIKE", "ZARA", "WALMART.COM"]}
+  ]
+}
