@@ -6,9 +6,9 @@ in SQLite so any account can be summarized by month and category.
 
 Usage:
     python src/download_data.py                     # one-time download
-    python src/tracker.py build                     # load + categorize -> data/bank.db
-    python src/tracker.py summary --account 2378 --year 1998
-    python src/tracker.py flags --account 2378 --year 1998
+    python src/tracker.py build                     # 500-account sample -> data/bank.db
+    python src/tracker.py summary --account 2630 --year 1998
+    python src/tracker.py flags --account 2630 --year 1998
     python src/tracker.py fees --year 1998
 """
 
@@ -24,6 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 RAW = ROOT / "data" / "raw"
 DB_PATH = ROOT / "data" / "bank.db"
 CONFIG = json.loads((ROOT / "config" / "categories.json").read_text())
+
+# The analysis uses a random sample of accounts (fixed seed, so results are reproducible).
+SAMPLE_ACCOUNTS = 500
+SAMPLE_SEED = 42
 
 # Approximate 1998 average exchange rate, used only to show amounts in USD for context.
 CZK_PER_USD = 32.3
@@ -73,8 +77,17 @@ def clean(tx: pd.DataFrame, accounts: pd.DataFrame) -> tuple[pd.DataFrame, pd.Da
     return out, acc[["account_id", "district_id", "opened", "statement_frequency"]]
 
 
-def build_database(db_path: Path = DB_PATH) -> tuple[int, int]:
-    tx, accounts = clean(*load_raw())
+def build_database(n_accounts: int | None = SAMPLE_ACCOUNTS, db_path: Path = DB_PATH) -> tuple[int, int]:
+    """Clean and categorize the raw data and store it in SQLite.
+
+    n_accounts: size of the random account sample (None = all 4,500 accounts).
+    """
+    raw_tx, raw_accounts = load_raw()
+    if n_accounts:
+        keep = raw_accounts["account_id"].sample(n_accounts, random_state=SAMPLE_SEED)
+        raw_accounts = raw_accounts[raw_accounts["account_id"].isin(keep)]
+        raw_tx = raw_tx[raw_tx["account_id"].isin(keep)]
+    tx, accounts = clean(raw_tx, raw_accounts)
     db_path.unlink(missing_ok=True)
     with sqlite3.connect(db_path) as conn:
         accounts.to_sql("accounts", conn, index=False)
@@ -109,7 +122,9 @@ def monthly_spending(account_id: int | None = None, year: int | None = None) -> 
 def main() -> None:
     p = argparse.ArgumentParser(description="Bank expense tracker")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("build", help="load raw data, categorize, and store in SQLite")
+    b = sub.add_parser("build", help="load raw data, categorize, and store in SQLite")
+    b.add_argument("--accounts", type=int, default=SAMPLE_ACCOUNTS,
+                   help=f"random sample size (default {SAMPLE_ACCOUNTS}; 0 = all 4,500)")
     for name in ("summary", "flags"):
         s = sub.add_parser(name)
         s.add_argument("--account", type=int, required=True)
@@ -120,7 +135,7 @@ def main() -> None:
     pd.set_option("display.width", 140)
 
     if args.cmd == "build":
-        n_tx, n_acc = build_database()
+        n_tx, n_acc = build_database(args.accounts or None)
         print(f"Stored {n_tx:,} transactions for {n_acc:,} accounts in {DB_PATH.relative_to(ROOT)}")
     elif args.cmd == "summary":
         m = monthly_spending(args.account, args.year).round(0)

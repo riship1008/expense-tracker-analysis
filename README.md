@@ -1,91 +1,100 @@
-# Expense Tracker Analysis
+# Expense Tracker: Real Bank Transaction Analysis
 
-A Python expense tracker that imports raw bank CSV exports, categorizes every transaction, stores it in SQLite, and powers an analysis notebook. The notebook shows where the money goes, flags unusual months, finds recurring charges, forecasts upcoming spending, and estimates how much realistic changes would save.
+A Python + SQLite expense tracker built on **real, anonymized bank data**. It translates and categorizes every transaction, tracks spending by category and month, flags spending spikes, finds avoidable fees, forecasts upcoming spending, and models savings scenarios.
 
-**Tools:** Python, pandas, SQLite, Matplotlib, Seaborn, Jupyter
+**Tools:** Python, pandas, SQLite, statsmodels, Matplotlib, Seaborn, Jupyter
 
-> **About the data:** the analysis runs on **12 months of sample transactions** (`data/sample/`) generated to match a realistic college-student budget and a real bank's export format. It includes messy merchant names, biweekly paychecks, and semester costs. The tracker works the same way on real exports, as shown under [Use it on your own bank data](#use-it-on-your-own-bank-data).
+**Data:** the [Berka dataset](https://github.com/jlacko/berka-dataset): real transactions from a Czech bank, released (anonymized) for the PKDD'99 Discovery Challenge. This project uses a **random sample of 500 accounts (117,560 transactions, 1993–1998)**, with the main analysis on the **12 months of 1998 (35,911 transactions)**. Amounts are in Czech crowns (CZK); 1998 averaged about 32 CZK per US dollar.
 
 ---
 
 ## Key findings
 
-![Income vs spending](reports/figures/01_income_vs_spending.png)
+![1998 spending](reports/figures/01_spending_1998.png)
 
-- **Spending ($11,379) outran income ($9,294) by about $2,085.** 9 of 12 months ran a deficit, and summer income covered the school year.
-- **Commuting is the biggest cost.** Car (insurance, repairs, parking permits) and gas make up **43% of all spending**.
-- **Eating out cost 1.6x groceries:** $1,829 on delivery, restaurants, and coffee vs. $1,122 on groceries.
-- **Food delivery jumps about 4.7x during exam weeks**, and Friday through Sunday account for half of discretionary spending.
-- **Most spikes are predictable.** Semester starts, December gifts, spring break, and finals explain most month-over-month jumps.
-- **Five realistic changes would save about $1,400/year**, cutting the annual shortfall by two-thirds.
+- **100% of transactions categorized automatically.** The bank's Czech codes (`SIPO`, `SANKC. UROK`, `VYBER KARTOU`) are translated into 12 English categories in 5 groups: Income, Essential, Discretionary, Cash & Transfers, and Avoidable.
+- **Cash dominated.** The average account spent **17,308 CZK/month (~$536)** in 1998: 74% as cash withdrawals, 17% on household bills, under 1% by card.
+- **Spending is seasonal.** January and June run **53% above** other months, December card spending is **4.5x** a normal month, and household bills per account rose **18%** from 1995 to 1998.
+- **60% of accounts had at least one spending spike** (spending doubled and rose 10,000+ CZK vs. the prior month), and **98% of spikes were driven by cash withdrawals**.
+- **38% of accounts spent more than they took in** during 1998, and the median savings rate was just 2.4%.
 
-![Spending by category](reports/figures/02_spending_by_category.png)
+![Patterns over time](reports/figures/02_patterns_over_time.png)
 
-![Discretionary patterns](reports/figures/03_discretionary_patterns.png)
+## Month-over-month spike detection
 
-## What the tracker does
+Each account's monthly total is compared with the previous month. A spike requires **both** a ≥100% increase **and** ≥10,000 CZK, which filters out noise from small accounts.
 
-| Feature | How it works |
-|---|---|
-| **Imports any major bank export** | Auto-detects Chase, Bank of America, and Capital One CSV layouts (including Capital One's split debit/credit columns) and normalizes them |
-| **Categorizes automatically** | Keyword rules in [`config/categories.json`](config/categories.json) map messy descriptions (`UBER *EATS PENDING`, `TST* NANDOS PERI PERI`) to 14 categories in 4 groups: Income, Essential, Discretionary, Transfer. 100% of sample transactions categorized |
-| **Never double-counts** | Transactions are stored in SQLite with a uniqueness constraint, so re-importing overlapping exports is safe |
-| **Flags month-over-month jumps** | A category is flagged when it rises **≥30% and ≥$40**, which filters out noise from small categories |
-| **Finds recurring charges** | Detects subscriptions and bills by looking for a repeated merchant with a 25-35 day cadence and stable amount, and flags ones that stopped |
-| **Suggests a budget** | Median month for regular categories and a "sinking fund" (yearly total / 12) for lumpy ones like textbooks and travel |
+![Spikes by month](reports/figures/03_spikes_by_month.png)
 
-```
-$ python src/tracker.py summary --month 2026-03
-       category         group  transactions  spent
-         Travel Discretionary             2 398.40
-            Gas     Essential             5 238.25
-   ...
-```
+## Avoidable costs
+
+Statement fees depend on how often a customer gets statements: weekly costs **2.1x** monthly, and "after each transaction" costs **6.9x**. Accounts that go negative also pay penalty interest.
+
+![Fees by frequency](reports/figures/04_fees_by_frequency.png)
 
 ## Forecasting
 
-With only 12 months of history, I compared simple, explainable methods using a **rolling backtest**: each of the last 6 months is forecast using only the months before it.
+Average spending per account per month is forecast with a **rolling backtest**: each month of 1998 is predicted using only earlier data, starting from 1995.
 
-| Method | Mean absolute error |
+| Method | MAPE |
 |---|---|
-| **Baseline + calendar** (normal month + known scheduled costs) | **$99 (~10% of a month)** |
-| Historical average | $216 |
-| Trailing 3-month average | $260 |
-| Last month | $318 |
+| **Same month last year x trend** | **6.6%** |
+| Holt-Winters (trend + seasonality) | 7.2% |
+| Same month last year | 7.6% |
+| Trailing 3-month average | 21.9% |
+| Last month | 25.7% |
 
-Most of the volatility comes from *scheduled* costs like semester starts and holidays, not randomness, so adding a simple calendar more than halves the error.
+Because spending is strongly seasonal, the seasonal methods cut error by about 4x compared with simple averages. The model predicts another January spike in 1999.
 
-![Forecast](reports/figures/04_forecast.png)
+![Forecast](reports/figures/06_forecast.png)
 
-## Savings scenarios
+## Savings recommendations
 
-![Savings scenarios](reports/figures/05_savings_scenarios.png)
+| Recommendation | Accounts | Savings |
+|---|---|---|
+| Switch weekly / per-transaction statements to monthly | 36 | ~339 CZK per account per year |
+| Keep a buffer to avoid negative balances (penalty interest) | 14 | ~209 CZK per account per year |
+| Overspending accounts: cut cash withdrawals by 10% | 186 | Fully closes the 1998 shortfall for **57%** of them |
 
-## Use it on your own bank data
+## Using the tracker
 
 ```bash
 git clone https://github.com/riship1008/expense-tracker-analysis.git
 cd expense-tracker-analysis
 pip install -r requirements.txt
 
-python src/tracker.py import ~/Downloads/your_bank_export.csv   # Chase, BofA, or Capital One
-python src/tracker.py uncategorized    # see anything the rules missed, then add keywords to config/categories.json
-python src/tracker.py summary --month 2026-09
-python src/tracker.py budget
+python src/download_data.py                          # download the raw bank files (~70 MB)
+python src/tracker.py build                          # translate, categorize, store 500-account sample in SQLite
+python src/tracker.py summary --account 2630 --year 1998   # one account's spending by month and category
+python src/tracker.py flags --account 2630 --year 1998     # month-over-month increases by category
+python src/tracker.py fees --year 1998                     # avoidable fees and penalty interest
 ```
 
-To run the full notebook on your data, point the import cell in `notebooks/expense_analysis.ipynb` at your file. Real exports stay local: `.gitignore` excludes the database and any CSV outside `data/sample/`.
+```
+$ python src/tracker.py summary --account 2630 --year 1998
+category  Bank Fees  Cash Withdrawals    TOTAL
+month
+1998-01        15.0           41500.0  41515.0
+1998-02        15.0           11200.0  11215.0
+...
+```
+
+Use `--accounts 0` with `build` to load all 4,500 accounts (1M+ transactions).
 
 ## Project structure
 
 ```
 expense-tracker-analysis/
-├── config/categories.json          # categorization rules
-├── data/sample/sample_bank_export.csv
-├── notebooks/expense_analysis.ipynb
+├── config/categories.json            # Czech code translations + categorization rules
+├── notebooks/bank_expense_analysis.ipynb
 ├── reports/figures/
 └── src/
-    ├── tracker.py                  # import, categorize, store, summarize (CLI)
-    ├── analysis.py                 # MoM flags, recurring charges, backtesting
-    └── generate_sample_data.py     # builds the sample dataset
+    ├── download_data.py              # fetches the Berka dataset
+    ├── tracker.py                    # build SQLite DB, categorize, CLI summaries
+    └── analysis.py                   # month-over-month flags, forecast backtesting
 ```
+
+## Limitations
+- This is 1990s data from one Czech bank, so patterns like heavy cash use reflect that market, not today's.
+- Cash withdrawals and transfers carry no purpose code, so what that money bought can't be broken down further.
+- Results come from a random 500-account sample (fixed seed) of the bank's 4,500 accounts.
