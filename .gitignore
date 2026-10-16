@@ -1,0 +1,6 @@
+data/expenses.db
+data/*.csv
+!data/sample/*.csv
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
